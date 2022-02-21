@@ -1,0 +1,101 @@
+import "hashes/sha256/embed/512bitPadded" as sha256
+import "hashes/sha256/embed/1024bitPadded" as sha256_4
+import "utils/pack/bool/nonStrictUnpack256.zok" as field_to_bool
+import "utils/casts/u32_8_to_bool_256.zok" as u32_8_to_bool_256
+import "utils/casts/u32_to_field" as to_field
+import "utils/pack/u32/nonStrictUnpack256" as to_u32_8
+import "utils/casts/bool_256_to_u32_8.zok" as bool_to_u32_8
+import "utils/pack/bool/pack128.zok" as pack128
+import "utils/pack/bool/unpack128.zok" as unpack128
+import "EMBED/unpack" as unpack
+
+struct BalanceUpdate {
+	field oldEthAmount
+	field oldTokenAmount
+	field oldNonce
+	field newEthAmount
+	field newTokenAmount
+	field newNonce
+	u32[5] address
+	field[8][2] merklePath
+}
+
+def field_to_64bit(field i) -> bool[64]:
+    bool[254] b = unpack(i)
+    assert(b[0..190] == [false; 190])
+    return b[190..254]
+
+def verifyTrades(BalanceUpdate[3] balances, field ethToToken, field tokenToEth) -> (field[3]):
+	field boughtEth = 0
+	field soldEth = 0
+	field boughtToken = 0
+	field soldToken = 0
+	for field i in 0..3 do
+		assert(balances[i].oldNonce == balances[i].newNonce - 1) // makes sure the nonce is incremented
+		field tradeDirection = if balances[i].oldEthAmount >= balances[i].newEthAmount then 0 else 1 fi
+		field deltaEth = if tradeDirection == 0 then balances[i].oldEthAmount - balances[i].newEthAmount else balances[i].newEthAmount - balances[i].oldEthAmount fi
+		field deltaToken = if tradeDirection == 0 then balances[i].newTokenAmount - balances[i].oldTokenAmount else balances[i].oldTokenAmount - balances[i].newTokenAmount fi
+		boughtEth = if tradeDirection == 1 then boughtEth + deltaEth else boughtEth fi
+		soldEth = if tradeDirection == 0 then soldEth + deltaEth else soldEth fi
+		boughtToken = if tradeDirection == 0 then boughtToken + deltaToken else boughtToken fi
+		soldToken = if tradeDirection == 1 then soldToken + deltaToken else soldToken fi
+		assert(ethToToken * deltaEth == 10000000000 * deltaToken && tradeDirection == 0 || 1000000000000 * deltaEth == tokenToEth * deltaToken && tradeDirection == 1)
+	endfor
+	//                                    +Eth, -Token | -Eth, +Token
+	field direction = if boughtEth > soldEth then 1 else 0 fi
+	field deltaEth = if direction == 1 then boughtEth - soldEth else soldEth - boughtEth fi
+	field deltaToken = if direction == 0 then boughtToken - soldToken else soldToken - boughtToken fi
+	return [direction, deltaEth, deltaToken]
+
+def hashLeaf(BalanceUpdate balance) -> (bool[2][256]):
+	bool[2][256] res = [[false;256];2]
+	bool[256] addrs = u32_8_to_bool_256([...balance.address, 0x00000000, 0x00000000, 0x00000000])
+	bool[256] amounts = [...field_to_64bit(balance.oldEthAmount), ...field_to_64bit(balance.oldTokenAmount), ...field_to_64bit(balance.oldNonce), ...field_to_64bit(0)]
+	bool[256] temp = sha256(addrs, amounts)
+	res[0] = temp
+	amounts = [...field_to_64bit(balance.newEthAmount), ...field_to_64bit(balance.newTokenAmount), ...field_to_64bit(balance.newNonce), ...field_to_64bit(0)]
+	temp = sha256(addrs, amounts)
+	res[1] = temp
+	return res
+
+def hashFinalBalances(bool[3][256] newBalancesHash, field ethToToken, field tokenToEth, field deltaEth, field deltaToken, field direction, bool[256] oldRoot, bool[256] newRoot) -> (field[2]): //194615 const
+	bool[256] rootPrice = sha256_4(oldRoot, newRoot, [...field_to_64bit(ethToToken), ...field_to_64bit(tokenToEth), ...field_to_64bit(deltaEth), ...field_to_64bit(deltaToken)], field_to_bool(direction))
+	bool[256] res = sha256_4(newBalancesHash[0], newBalancesHash[1], newBalancesHash[2], rootPrice) // hacky
+	return [pack128(res[0..128]), pack128(res[128..256])]
+
+def merklePathToBin(field[8][2] proof) -> (bool[8][256]): //587502
+	bool[8][256] result = [[false;256];8]
+	for field i in 0..8 do
+		result[i] = [...unpack128(proof[i][0]), ...unpack128(proof[i][1])]
+	endfor
+	return result
+
+def computeMerkle(field[8][2] merklePath, bool[256] leaf) -> (field[2]): // rehashes merkle root
+	bool[256] computedHash = leaf
+	bool[8][256] merklePathBin = merklePathToBin(merklePath)
+	for field i in 0..8 do
+		computedHash = if pack128(computedHash[0..128]) <= merklePath[i][0] then sha256(computedHash, merklePathBin[i]) else sha256(merklePathBin[i], computedHash) fi
+	endfor
+	return [pack128(computedHash[0..128]), pack128(computedHash[128..256])]
+
+def verifyLeaf(bool[2][256] hashedLeaf, field[8][2] merklePath, field[2] root) -> (field[2]):
+	field[2] calcedRootField = computeMerkle(merklePath, hashedLeaf[0])
+	assert(root[0] == calcedRootField[0] && root[1] == calcedRootField[1]) // old root can be reconstructed
+	return computeMerkle(merklePath, hashedLeaf[1])
+
+def verifyAndUpdateTree(BalanceUpdate[3] balances, field[2] root) -> (bool[4][256]):
+	bool[4][256] newBalanceHashed = [[false;256];4]
+	for field i in 0..3 do
+		bool[2][256] hashedBalance = hashLeaf(balances[i])
+		newBalanceHashed[i] = hashedBalance[1]
+		root = verifyLeaf(hashedBalance, balances[i].merklePath, root)
+	endfor
+	newBalanceHashed[3] = [...unpack128(root[0]), ...unpack128(root[1])]
+	return newBalanceHashed
+
+def main(private BalanceUpdate[3] balances, private field[2] root, private field ethToToken, private field tokenToEth) -> (field[2]): //14664553
+	// BalanceUpdate[3] balances = [BalanceUpdate{oldEthAmount:10000000000,oldTokenAmount:0,oldNonce:1,newEthAmount:0,newTokenAmount:22337122936302,newNonce:2,address:[0x4d9b01D7,0x11c90883,0x3f97ea78,0xCF2AE0C7,0x74607a4d],merklePath:[[326522724692461750427768532537390503835,89059515727727869117346995944635890507],[159882277963452038198100824239526257436,27026330381460784021377407195009447199],[265181187819933133817279458938021520211,226826845712117313199728648141007401788],[110894977352237344843883812633147901333,90983754514093244277048472558931415612],[211336224248324717186270758123443705798,103214039003913815936073814883481423152],[287849902845851149564392658358832810366,22992467719797921752054319444564123553],[180666250266229371542610003800057229145,156693885583226463728325172930408513324],[51198084693452429383185080494257164612,322193689052356961661042599016221487507]]},BalanceUpdate{oldEthAmount:10000000000,oldTokenAmount:0,oldNonce:1,newEthAmount:0,newTokenAmount:22337122936302,newNonce:2,address:[0xcc08e563,0x6A9ceb03,0x917C1ac7,0xBbEda23a,0xD57766F3],merklePath:[[335522210239605814187773385898707562805,243227419443753786356695909249628089714],[115598013643809067328235069945026305226,313470390248389179834576676895486942967],[265181187819933133817279458938021520211,226826845712117313199728648141007401788],[110894977352237344843883812633147901333,90983754514093244277048472558931415612],[211336224248324717186270758123443705798,103214039003913815936073814883481423152],[287849902845851149564392658358832810366,22992467719797921752054319444564123553],[180666250266229371542610003800057229145,156693885583226463728325172930408513324],[51198084693452429383185080494257164612,322193689052356961661042599016221487507]]},BalanceUpdate{oldEthAmount:0,oldTokenAmount:50000000000000,oldNonce:1,newEthAmount:19111202055,newTokenAmount:5000000000000,newNonce:2,address:[0x31b87891,0x8679d9DA,0x1DB277B1,0xA2fD67Aa,0x01032920],merklePath:[[156293953402678764124021694264417704517,211427153916904931227696157874615478061],[115598013643809067328235069945026305226,313470390248389179834576676895486942967],[265181187819933133817279458938021520211,226826845712117313199728648141007401788],[110894977352237344843883812633147901333,90983754514093244277048472558931415612],[211336224248324717186270758123443705798,103214039003913815936073814883481423152],[287849902845851149564392658358832810366,22992467719797921752054319444564123553],[180666250266229371542610003800057229145,156693885583226463728325172930408513324],[51198084693452429383185080494257164612,322193689052356961661042599016221487507]]}]
+	field[3] netTrade = verifyTrades(balances, ethToToken, tokenToEth)
+	bool[4][256] rootAndBalanceHash = verifyAndUpdateTree(balances, root)
+	bool[256] oldRootBin = [...unpack128(root[0]), ...unpack128(root[1])]
+	return hashFinalBalances(rootAndBalanceHash[0..3], ethToToken, tokenToEth, netTrade[0], netTrade[1], netTrade[2], oldRootBin, rootAndBalanceHash[3])

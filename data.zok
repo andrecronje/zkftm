@@ -1,0 +1,101 @@
+/** Size constants */
+
+const u32 STACK_SIZE = 16
+const u32 MEMORY_SIZE = 16
+const u32 CALLDATA_SIZE = 32
+
+const u32 PROGRAM_SIZE = 32
+const u32 PROGRAM_ITERATIONS = 32
+
+/*******************/
+
+/** Data structures */
+
+// ZoKrates does not support constants here yet.
+struct Stack {
+	//u32[STACK_SIZE] values
+	u32[16] values
+	u32 length
+}
+
+// ZoKrates does not support constants here yet.
+struct Memory {
+	//u32[MEMORY_SIZE] values
+	u32[16] values
+}
+
+struct State {
+	Stack stack
+	Memory memory
+	u32 pc
+	bool running
+	bool error
+}
+
+// ZoKrates does not support constants here yet.
+struct Program {
+	//u32[PROGRAM_SIZE] instructions
+	u32[32] instructions
+}
+
+// ZoKrates does not support constants here yet.
+struct Calldata {
+	//u32[CALLDATA_SIZE] values
+	u32[32] values
+}
+
+/*******************/
+
+/** Stack helpers */
+
+def hasAtLeast<N>(Stack s) -> bool:
+	return s.length >= N
+
+def hasAtMost<N>(Stack s) -> bool:
+	return s.length <= N
+
+def nth<N>(Stack s) -> u32:
+	return s.values[s.length - N]
+
+def first(Stack s) -> u32:
+	return nth::<1>(s)
+
+def second(Stack s) -> u32:
+	return nth::<2>(s)
+
+def third(Stack s) -> u32:
+	return nth::<3>(s)
+
+def decrease<L>(Stack s) -> Stack:
+	assert(s.length >= L)
+	s.length = s.length - L
+	return s
+
+def increase<L>(Stack s) -> Stack:
+	assert(s.length + L < STACK_SIZE)
+	s.length = s.length + L
+	return s
+
+def writeTop(Stack s, u32 n) -> Stack:
+	s.values[s.length] = n
+	s = increase::<1>(s)
+	return s
+
+def writeFirst<L>(State s, u32 n) -> State:
+	s.stack = decrease::<L>(s.stack)
+	s.stack = writeTop(s.stack, n)
+	return s
+
+def write<L>(Stack s, u32 n) -> Stack:
+	s.values[s.length - L] = n
+	return s
+
+/*******************/
+
+/** State helpers */
+
+def error(State s) -> State:
+	s.error = true
+	return s
+
+/*******************/

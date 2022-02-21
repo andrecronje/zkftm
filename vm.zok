@@ -1,0 +1,81 @@
+from "./data.zok" import Stack, Memory, State, Program, Calldata, MEMORY_SIZE, PROGRAM_SIZE, PROGRAM_ITERATIONS, CALLDATA_SIZE, STACK_SIZE, error
+
+from "./opcodes.zok" import STOP, ADD, MUL, SUB, LT, EQ, JUMP, JUMPI, CALLDATALOAD, POP, PUSH32, DUP1, DUP2, DUP3, SWAP1, stop, add, mul, sub, lt, eq, jump, jumpi, calldataload, pop, mload, mstore, push, dup1, dup2, dup3, swap1
+
+def main(u32 memoryHash, u32 stackHash, Program program, private Calldata calldata) -> State:
+	// Start with empty stack and empty memory.
+	State s = State {
+		stack: Stack { values: [0; STACK_SIZE], length: 0 },
+		memory: Memory { values: [0; MEMORY_SIZE] },
+		pc: 0,
+		running: true,
+		error: false
+	}
+
+	for u32 i in 0..PROGRAM_ITERATIONS do
+		u32 instr = program.instructions[s.pc]
+
+		// Compute all possible future states nondeterministically.
+		State s1 = stop(s)
+		State s2 = add(s)
+		State s3 = mul(s)
+		State s4 = sub(s)
+		State s5 = lt(s)
+		State s6 = eq(s)
+		State s7 = jump(s)
+		State s8 = jumpi(s)
+		State s9 = calldataload(s, calldata)
+		State s10 = pop(s)
+		State s11 = push(s, program)
+		State s12 = dup1(s)
+		State s13 = dup2(s)
+		State s14 = dup3(s)
+		State s15 = swap1(s)
+
+		// Choose the appropriate data path and sync.
+		s = \
+			if (!s.running) then s else \
+			if (instr == STOP) then s1 else \
+			if (instr == ADD) then s2 else \
+			if (instr == MUL) then s3 else \
+			if (instr == SUB) then s4 else \
+			if (instr == LT) then s5 else \
+			if (instr == EQ) then s6 else \
+			if (instr == JUMP) then s7 else \
+			if (instr == JUMPI) then s8 else \
+			if (instr == CALLDATALOAD) then s9 else \
+			if (instr == POP) then s10 else \
+			if (instr == PUSH32) then s11 else \
+			if (instr == DUP1) then s12 else \
+			if (instr == DUP2) then s13 else \
+			if (instr == DUP3) then s14 else \
+			if (instr == SWAP1) then s15 else \
+				error(s) \
+			fi \
+			fi \
+			fi \
+			fi \
+			fi \
+			fi \
+			fi \
+			fi \
+			fi \
+			fi \
+			fi \
+			fi \
+			fi \
+			fi \
+			fi \
+			fi
+
+		s.pc = if s.running then (s.pc + 1) else s.pc fi
+
+		assert(!s.error)
+
+	endfor
+
+	// Execution should have stopped without error.
+	assert(!s.running)
+	assert(!s.error)
+
+	return s

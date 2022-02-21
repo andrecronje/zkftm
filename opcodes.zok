@@ -1,0 +1,182 @@
+from "./data.zok" import Stack, Memory, State, Program, Calldata, MEMORY_SIZE, PROGRAM_SIZE, CALLDATA_SIZE, STACK_SIZE, hasAtLeast, hasAtMost, first, second, third, decrease, increase, writeTop, writeFirst, write, error
+
+/** Opcode constants */
+
+const u32 STOP = 0x00000000
+
+const u32 ADD = 0x00000001
+const u32 MUL = 0x00000002
+const u32 SUB = 0x00000003
+
+const u32 LT = 0x00000010
+const u32 EQ = 0x00000014
+
+const u32 SHA3 = 0x00000020
+
+const u32 CALLDATALOAD = 0x00000035
+
+const u32 POP = 0x00000050
+
+const u32 JUMP = 0x00000056
+const u32 JUMPI = 0x00000057
+
+const u32 PUSH32 = 0x0000007f
+
+const u32 DUP1 = 0x00000080
+const u32 DUP2 = 0x00000081
+const u32 DUP3 = 0x00000082
+
+const u32 SWAP1 = 0x00000090
+
+/*******************/
+
+/** Opcodes */
+
+def stop(State s) -> State:
+	s.running = false
+	return s
+
+def add_true(State s) -> State:
+	return writeFirst::<2>(s, first(s.stack) + second(s.stack))
+
+def add(State s) -> State:
+	bool e = !s.running || !hasAtLeast::<2>(s.stack)
+	return if e then error(s) else add_true(s) fi
+
+def mul_true(State s) -> State:
+	return writeFirst::<2>(s, first(s.stack) * second(s.stack))
+
+def mul(State s) -> State:
+	bool e = !s.running || !hasAtLeast::<2>(s.stack)
+	return if e then error(s) else mul_true(s) fi
+
+def sub_true(State s) -> State:
+	return writeFirst::<2>(s, first(s.stack) - second(s.stack))
+
+def sub(State s) -> State:
+	bool e = !s.running || !hasAtLeast::<2>(s.stack)
+	return if e then error(s) else sub_true(s) fi
+
+def lt_true(State s) -> State:
+	u32 r = if first(s.stack) == second(s.stack) then 1 else 0 fi
+	return writeFirst::<2>(s, r)
+
+def lt(State s) -> State:
+	bool e = !s.running || !hasAtLeast::<2>(s.stack)
+	return if e then error(s) else lt_true(s) fi
+
+def eq_true(State s) -> State:
+	u32 r = if first(s.stack) == second(s.stack) then 1 else 0 fi
+	return writeFirst::<2>(s, r)
+
+def eq(State s) -> State:
+	bool e = !s.running || !hasAtLeast::<2>(s.stack)
+	return if e then error(s) else eq_true(s) fi
+
+def calldataload_true(State s, Calldata c) -> State:
+	return writeFirst::<1>(s, c.values[first(s.stack)])
+
+def calldataload_check_1(State s, Calldata c) -> State:
+	bool e = first(s.stack) >= CALLDATA_SIZE
+	return if e then error(s) else calldataload_true(s, c) fi
+
+def calldataload(State s, Calldata c) -> State:
+	bool e = !s.running || !hasAtLeast::<1>(s.stack)
+	return if e then error(s) else calldataload_check_1(s, c) fi
+
+def pop_true(State s) -> State:
+	s.stack = decrease::<1>(s.stack)
+	return s
+
+def pop(State s) -> State:
+	bool e = !s.running || !hasAtLeast::<1>(s.stack)
+	return if e then error(s) else pop_true(s) fi
+
+def jump_true(State s) -> State:
+	s.pc = if first(s.stack) == 0 then 0 else (first(s.stack) - 1) fi
+	return pop(s)
+
+def jump_check_1(State s) -> State:
+	bool e = first(s.stack) >= PROGRAM_SIZE
+	return if e then error(s) else jump_true(s) fi
+
+def jump(State s) -> State:
+	bool e = !s.running || !hasAtLeast::<1>(s.stack)
+	return if e then error(s) else jump_check_1(s) fi
+
+def jumpi_true(State s) -> State:
+	// I don't remember why operand - 1
+	// Ah because pc gets increased anyway after
+	s.pc = if second(s.stack) != 0x00000000 then (first(s.stack) - 1) else s.pc fi
+	s.stack = decrease::<2>(s.stack)
+	return s
+
+def jumpi_check_1(State s) -> State:
+	bool e = first(s.stack) >= PROGRAM_SIZE
+	return if e then error(s) else jumpi_true(s) fi
+
+def jumpi(State s) -> State:
+	bool e = !s.running || !hasAtLeast::<2>(s.stack)
+	return if e then error(s) else jumpi_check_1(s) fi
+
+def mload(State s) -> State:
+	bool e = !s.running || !hasAtLeast::<1>(s.stack) || first(s.stack) >= MEMORY_SIZE
+	return if e then error(s) else writeFirst::<1>(s, s.memory.values[first(s.stack)]) fi
+
+def mstore(State s) -> State:
+	bool e = !s.running || !hasAtLeast::<2>(s.stack) || first(s.stack) >= MEMORY_SIZE
+	s.stack = decrease::<2>(s.stack)
+	s.memory.values[first(s.stack)] = second(s.stack)
+	return if e then error(s) else s fi
+
+def push_true(State s, Program p) -> State:
+	s.pc = s.pc + 1
+	u32 x = p.instructions[s.pc]
+	s.stack = writeTop(s.stack, x)
+	return s
+
+def push_check_1(State s, Program p) -> State:
+	bool e = (s.pc + 1) >= PROGRAM_SIZE
+	return if e then error(s) else push_true(s, p) fi
+
+def push(State s, Program p) -> State:
+	u32 l = STACK_SIZE - 2
+	bool e = !s.running || !hasAtMost::<l>(s.stack)
+	return if e then error(s) else push_check_1(s, p) fi
+
+def dup1_true(State s) -> State:
+	s.stack = writeTop(s.stack, first(s.stack))
+	return s
+
+def dup1(State s) -> State:
+	u32 l = STACK_SIZE - 2
+	bool e = !s.running || !hasAtLeast::<1>(s.stack) || !hasAtMost::<l>(s.stack)
+	return if e then error(s) else dup1_true(s) fi
+
+def dup2_true(State s) -> State:
+	s.stack = writeTop(s.stack, second(s.stack))
+	return s
+
+def dup2(State s) -> State:
+	u32 l = STACK_SIZE - 2
+	bool e = !s.running || !hasAtLeast::<2>(s.stack) || !hasAtMost::<l>(s.stack)
+	return if e then error(s) else dup2_true(s) fi
+
+def dup3_true(State s) -> State:
+	s.stack = writeTop(s.stack, third(s.stack))
+	return s
+
+def dup3(State s) -> State:
+	u32 l = STACK_SIZE - 2
+	bool e = !s.running || !hasAtLeast::<3>(s.stack) || !hasAtMost::<l>(s.stack)
+	return if e then error(s) else dup3_true(s) fi
+
+def swap1_true(State s) -> State:
+	u32 temp = second(s.stack)
+	s.stack = write::<2>(s.stack, first(s.stack))
+	s.stack = write::<1>(s.stack, temp)
+	return s
+
+def swap1(State s) -> State:
+	bool e = !s.running || !hasAtLeast::<2>(s.stack) || !hasAtLeast::<2>(s.stack)
+	return if e then error(s) else swap1_true(s) fi

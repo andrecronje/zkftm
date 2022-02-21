@@ -1,0 +1,11 @@
+from "ecc/babyjubjubParams" import BabyJubJubParams
+import "signatures/verifyEddsa.code" as verifyEddsa
+import "ecc/babyjubjubParams.code" as context
+
+def main(private field[2] R, private field S, field[2] A, u32[8] M0, u32[8] M1) -> (bool):
+
+	BabyJubJubParams context = context()
+
+    bool isVerified = verifyEddsa(R, S, A, M0, M1, context)
+
+	return isVerified

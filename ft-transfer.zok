@@ -1,0 +1,125 @@
+import "hashes/mimc7/constants.zok" as constants
+
+def mimc7Hash(field x_in, field k) -> field:
+    field[91] c = constants()
+    field r = 0
+    for field i in 0..91 do
+        field t = if i == 0 then k+x_in else k + r + c[i] fi
+        field t2 = t * t
+        field t4 = t2 * t2
+        r = t2 * t4 * t
+    endfor
+    return r + x_in
+
+def mimc1(field one) -> field:
+    field r = 0
+    field h = mimc7Hash(one, r)
+    r = r + one + h
+    return r
+
+def mimc2(field[2] input) -> field:
+    field r = 0
+    for field i in 0..2 do
+        field h = mimc7Hash(input[i], r)
+        r = r + input[i] + h
+    endfor
+    return r
+
+def mimc3(field[3] input) -> field:
+    field r = 0
+    for field i in 0..3 do
+        field h = mimc7Hash(input[i], r)
+        r = r + input[i] + h
+    endfor
+    return r
+
+// amountA: the amount contained in the commitmentA (public)
+// nullifierA: the nullifier for the commitmentA (public)
+// rootA: the Merkle root of commitmentA (public)
+// secretKey: the secret key for the commitmentA and commitmentB (private)
+// randomA: token random nonce for the commitmentA (private)
+// pathA: the Merkle path for the commitmentA (private)
+
+// amountB: the amount contained in the commitmentB (public)
+// nullifierB: the nullifier for the commitmentB (public)
+// rootB: the Merkle root of commitmentB (public)
+// randomB: token random nonce for the commitmentB (private)
+// pathB: the Merkle path for the commitmentB (private)
+
+// - amountC:  the amount contained in the commitmentC (public)
+// - commitmentC: the commitment (public)
+// - publicKeyC: the public key of the commitmentC derived by hashing the Secret Key Sk of the commitmentC (private)
+// - randomC: token random nonce (private)
+
+// - amountD:  the amount contained in the commitmentD (public)
+// - commitmentD: the commitment (public)
+// - randomD: token random nonce (private)
+
+def main(field[10] publicInput, private field secretKey, private field randomA, private field[32] pathA, private field randomB, private field[32] pathB, private field publicKeyC, private field randomC, private field randomD)->bool:
+
+	// public input information
+	field amountA = publicInput[0]
+    field nullifierA = publicInput[1]
+    field rootA = publicInput[2]
+
+	field amountB = publicInput[3]
+    field nullifierB = publicInput[4]
+    field rootB = publicInput[5]
+
+	field amountC = publicInput[6]
+	field commitmentC = publicInput[7]
+
+	field amountD = publicInput[8]
+	field commitmentD = publicInput[9]
+
+	// check nullifierA
+	// nullifier = H(secretKey|random)
+	field[2] input2 = [secretKey, randomA]
+	field nullifierAResult =  mimc2(input2)
+
+	// publicKey = H(secretKey)
+	field publicKey = mimc1(secretKey)
+
+	// commitment = H(amount|publicKey|random)
+	field[3] input3 = [amountA, publicKey, randomA]
+	field commitmentA = mimc3(input3)
+
+	// Prove that the commitment is in the Merkle tree
+	field rootAHash = commitmentA
+	for field i in 0..32 do
+		input2 = [rootAHash, pathA[i]]
+		rootAHash = mimc2(input2)
+	endfor
+
+	// check nullifierB
+	// nullifier = H(secretKey|random)
+	input2 = [secretKey, randomB]
+	field nullifierBResult = mimc2(input2)
+
+	// commitment = H(amount|publicKey|random)
+	input3 = [amountB, publicKey, randomB]
+	field commitmentB = mimc3(input3)
+
+	// Prove that the commitment is in the Merkle tree
+	field rootBHash = commitmentB
+	for field i in 0..32 do
+		input2 = [rootBHash, pathB[i]]
+		rootBHash = mimc2(input2)
+	endfor
+
+	// check commitmentC
+	// commitment = H(amount|publicKey|random)
+	input3 = [amountC, publicKeyC, randomC]
+	field commitmentCresult = mimc3(input3)
+
+	// check commitmentD
+	// commitment = H(amount|publicKey|random)
+	input3 = [amountD, publicKey, randomD]
+	field commitmentDresult = mimc3(input3)
+
+	// check sum
+	// A + B = C + D
+	field sumIn = amountA + amountB
+	field sumOut = amountC + amountD
+
+	return rootA == rootAHash && nullifierA == nullifierAResult && rootB == rootBHash && nullifierB == nullifierBResult && commitmentC == commitmentCresult && commitmentD == commitmentDresult && sumIn == sumOut
